@@ -25,36 +25,22 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Provide helpful information for {@link ExtensionLoader} to inject dependency extension instance.
+ * Provide helpful information for {@link ExtensionLoader} to inject dependency
+ * extension instance.
  *
  * @see ExtensionLoader
  * @see URL
  */
 @Documented
 @Retention(RetentionPolicy.RUNTIME)
-@Target({ElementType.TYPE, ElementType.METHOD})
+@Target({ ElementType.TYPE, ElementType.METHOD })
 public @interface Adaptive {
-    /**
-     * Decide which target extension to be injected. The name of the target extension is decided by the parameter passed
-     * in the URL, and the parameter names are given by this method.
-     * <p>
-     * If the specified parameters are not found from {@link URL}, then the default extension will be used for
-     * dependency injection (specified in its interface's {@link SPI}).
-     * <p>
-     * For example, given <code>String[] {"key1", "key2"}</code>:
-     * <ol>
-     * <li>find parameter 'key1' in URL, use its value as the extension's name</li>
-     * <li>try 'key2' for extension's name if 'key1' is not found (or its value is empty) in URL</li>
-     * <li>use default extension if 'key2' doesn't exist either</li>
-     * <li>otherwise, throw {@link IllegalStateException}</li>
-     * </ol>
-     * If the parameter names are empty, then a default parameter name is generated from interface's
-     * class name with the rule: divide classname from capital char into several parts, and separate the parts with
-     * dot '.', for example, for {@code org.apache.dubbo.xxx.YyyInvokerWrapper}, the generated name is
-     * <code>String[] {"yyy.invoker.wrapper"}</code>.
-     *
-     * @return parameter names in URL
-     */
-    String[] value() default {};
+	/**
+	 * 
+	 * 确定要注入的目标扩展。目标扩展名的名称由传递的参数URL中获取。 
+	 * 如果在URL中找不到指定的参数，则将使用默认扩展名（即在SPI注解中设置的）依赖注入。
+	 * 如果注解中参数也没有指定，则根据接口名称生成名称（如TestInvoker->test.invoker）
+	 */
+	String[] value() default {};
 
 }

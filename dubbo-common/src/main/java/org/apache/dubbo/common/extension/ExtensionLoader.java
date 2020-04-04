@@ -557,21 +557,25 @@ public class ExtensionLoader<T> {
 
     @SuppressWarnings("unchecked")
     public T getAdaptiveExtension() {
+    	//从缓存中获取自适应拓展实例
         Object instance = cachedAdaptiveInstance.get();
         if (instance == null) {
+        	//获取失败，判断创建拓展实例异常是否为空
             if (createAdaptiveInstanceError != null) {
                 throw new IllegalStateException("Failed to create adaptive instance: " +
                         createAdaptiveInstanceError.toString(),
                         createAdaptiveInstanceError);
             }
-
+            //双重检测，创建自适应拓展单实例
             synchronized (cachedAdaptiveInstance) {
                 instance = cachedAdaptiveInstance.get();
                 if (instance == null) {
                     try {
+                    	//创建自适应拓展实例
                         instance = createAdaptiveExtension();
                         cachedAdaptiveInstance.set(instance);
                     } catch (Throwable t) {
+                    	//缓存创建自适应拓展异常
                         createAdaptiveInstanceError = t;
                         throw new IllegalStateException("Failed to create adaptive instance: " + t.toString(), t);
                     }
@@ -1028,6 +1032,9 @@ public class ExtensionLoader<T> {
     @SuppressWarnings("unchecked")
     private T createAdaptiveExtension() {
         try {
+        	//1.getAdaptiveExtensionClass获取自适应拓展类
+        	//2.反射newInstance创建实例
+        	//3.使用setter依赖注入扩展injectExtension(主要是手工编码实现的拓展需要注入依赖)
             return injectExtension((T) getAdaptiveExtensionClass().newInstance());
         } catch (Exception e) {
             throw new IllegalStateException("Can't create adaptive extension " + type + ", cause: " + e.getMessage(), e);
@@ -1035,17 +1042,24 @@ public class ExtensionLoader<T> {
     }
 
     private Class<?> getAdaptiveExtensionClass() {
+    	//通过SPI获取所有扩展类（具体逻辑请参考文首提到的SPI源码博客）
         getExtensionClasses();
+        //检查自适应拓展类缓存是否存在，存在直接返回
         if (cachedAdaptiveClass != null) {
             return cachedAdaptiveClass;
         }
+        //创建自适应拓展实例
         return cachedAdaptiveClass = createAdaptiveExtensionClass();
     }
 
     private Class<?> createAdaptiveExtensionClass() {
+    	//生成自适应拓展类代码，生成逻辑下一步介绍
         String code = new AdaptiveClassCodeGenerator(type, cachedDefaultName).generate();
+        //优先使用线程上下文类加载器，不存在使用ExtensionLoader类的加载器
         ClassLoader classLoader = findClassLoader();
+        //通过SPI获取Compiler的ExtensionLoader实例，再获取他的自适应拓展
         org.apache.dubbo.common.compiler.Compiler compiler = ExtensionLoader.getExtensionLoader(org.apache.dubbo.common.compiler.Compiler.class).getAdaptiveExtension();
+        //调用Compiler编译生成的拓展类代码
         return compiler.compile(code, classLoader);
     }
 
