@@ -45,12 +45,12 @@ public class DubboBootstrapApplicationListener extends OneTimeExecutionApplicati
     public DubboBootstrapApplicationListener() {
         this.dubboBootstrap = DubboBootstrap.getInstance();
     }
-
+    
     @Override
     public void onApplicationContextEvent(ApplicationContextEvent event) {
-        if (event instanceof ContextRefreshedEvent) {
+        if (event instanceof ContextRefreshedEvent) {//是上下文刷新事件则调用DubboBootstrap的start方法
             onContextRefreshedEvent((ContextRefreshedEvent) event);
-        } else if (event instanceof ContextClosedEvent) {
+        } else if (event instanceof ContextClosedEvent) {//如果是上下文关闭事件则调用DubboBootstrap的stop方法
             onContextClosedEvent((ContextClosedEvent) event);
         }
     }
