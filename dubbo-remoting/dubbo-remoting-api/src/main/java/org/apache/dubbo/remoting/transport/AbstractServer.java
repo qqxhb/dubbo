@@ -45,149 +45,163 @@ import static org.apache.dubbo.remoting.Constants.IDLE_TIMEOUT_KEY;
  */
 public abstract class AbstractServer extends AbstractEndpoint implements RemotingServer {
 
-    protected static final String SERVER_THREAD_POOL_NAME = "DubboServerHandler";
-    private static final Logger logger = LoggerFactory.getLogger(AbstractServer.class);
-    ExecutorService executor;
-    private InetSocketAddress localAddress;
-    private InetSocketAddress bindAddress;
-    private int accepts;
-    private int idleTimeout;
+	protected static final String SERVER_THREAD_POOL_NAME = "DubboServerHandler";
+	private static final Logger logger = LoggerFactory.getLogger(AbstractServer.class);
+	ExecutorService executor;
+	private InetSocketAddress localAddress;
+	private InetSocketAddress bindAddress;
+	private int accepts;
+	private int idleTimeout;
 
-    private ExecutorRepository executorRepository = ExtensionLoader.getExtensionLoader(ExecutorRepository.class).getDefaultExtension();
+	private ExecutorRepository executorRepository = ExtensionLoader.getExtensionLoader(ExecutorRepository.class)
+			.getDefaultExtension();
 
-    public AbstractServer(URL url, ChannelHandler handler) throws RemotingException {
-        super(url, handler);
-        localAddress = getUrl().toInetSocketAddress();
+	public AbstractServer(URL url, ChannelHandler handler) throws RemotingException {
+		// 调用父类构造方法(简单判断及解码器、超时时间等属性的获取赋值)
+		super(url, handler);
+		// 获取套接字地址
+		localAddress = getUrl().toInetSocketAddress();
+		//// 获取 ip 和端口
+		String bindIp = getUrl().getParameter(Constants.BIND_IP_KEY, getUrl().getHost());
+		int bindPort = getUrl().getParameter(Constants.BIND_PORT_KEY, getUrl().getPort());
+		if (url.getParameter(ANYHOST_KEY, false) || NetUtils.isInvalidLocalHost(bindIp)) {
+			// anyhost=true或者是无效的本地主机则设置ip为0.0.0.0
+			bindIp = ANYHOST_VALUE;
+		}
+		// 创建绑定套接字地址
+		bindAddress = new InetSocketAddress(bindIp, bindPort);
+		// 获取最大可接受连接数,默认0
+		this.accepts = url.getParameter(ACCEPTS_KEY, DEFAULT_ACCEPTS);
+		// 获取超时时间 默认600000毫秒
+		this.idleTimeout = url.getParameter(IDLE_TIMEOUT_KEY, DEFAULT_IDLE_TIMEOUT);
+		try {
+			// 打开服务
+			doOpen();
+			if (logger.isInfoEnabled()) {
+				logger.info("Start " + getClass().getSimpleName() + " bind " + getBindAddress() + ", export "
+						+ getLocalAddress());
+			}
+		} catch (Throwable t) {
+			throw new RemotingException(url.toInetSocketAddress(), null, "Failed to bind " + getClass().getSimpleName()
+					+ " on " + getLocalAddress() + ", cause: " + t.getMessage(), t);
+		}
+		// 创建执行器
+		executor = executorRepository.createExecutorIfAbsent(url);
+	}
 
-        String bindIp = getUrl().getParameter(Constants.BIND_IP_KEY, getUrl().getHost());
-        int bindPort = getUrl().getParameter(Constants.BIND_PORT_KEY, getUrl().getPort());
-        if (url.getParameter(ANYHOST_KEY, false) || NetUtils.isInvalidLocalHost(bindIp)) {
-            bindIp = ANYHOST_VALUE;
-        }
-        bindAddress = new InetSocketAddress(bindIp, bindPort);
-        this.accepts = url.getParameter(ACCEPTS_KEY, DEFAULT_ACCEPTS);
-        this.idleTimeout = url.getParameter(IDLE_TIMEOUT_KEY, DEFAULT_IDLE_TIMEOUT);
-        try {
-            doOpen();
-            if (logger.isInfoEnabled()) {
-                logger.info("Start " + getClass().getSimpleName() + " bind " + getBindAddress() + ", export " + getLocalAddress());
-            }
-        } catch (Throwable t) {
-            throw new RemotingException(url.toInetSocketAddress(), null, "Failed to bind " + getClass().getSimpleName()
-                    + " on " + getLocalAddress() + ", cause: " + t.getMessage(), t);
-        }
-        executor = executorRepository.createExecutorIfAbsent(url);
-    }
+	protected abstract void doOpen() throws Throwable;
 
-    protected abstract void doOpen() throws Throwable;
+	protected abstract void doClose() throws Throwable;
 
-    protected abstract void doClose() throws Throwable;
+	@Override
+	public void reset(URL url) {
+		if (url == null) {
+			return;
+		}
+		try {
+			if (url.hasParameter(ACCEPTS_KEY)) {
+				int a = url.getParameter(ACCEPTS_KEY, 0);
+				if (a > 0) {
+					this.accepts = a;
+				}
+			}
+		} catch (Throwable t) {
+			logger.error(t.getMessage(), t);
+		}
+		try {
+			if (url.hasParameter(IDLE_TIMEOUT_KEY)) {
+				int t = url.getParameter(IDLE_TIMEOUT_KEY, 0);
+				if (t > 0) {
+					this.idleTimeout = t;
+				}
+			}
+		} catch (Throwable t) {
+			logger.error(t.getMessage(), t);
+		}
+		executorRepository.updateThreadpool(url, executor);
+		super.setUrl(getUrl().addParameters(url.getParameters()));
+	}
 
-    @Override
-    public void reset(URL url) {
-        if (url == null) {
-            return;
-        }
-        try {
-            if (url.hasParameter(ACCEPTS_KEY)) {
-                int a = url.getParameter(ACCEPTS_KEY, 0);
-                if (a > 0) {
-                    this.accepts = a;
-                }
-            }
-        } catch (Throwable t) {
-            logger.error(t.getMessage(), t);
-        }
-        try {
-            if (url.hasParameter(IDLE_TIMEOUT_KEY)) {
-                int t = url.getParameter(IDLE_TIMEOUT_KEY, 0);
-                if (t > 0) {
-                    this.idleTimeout = t;
-                }
-            }
-        } catch (Throwable t) {
-            logger.error(t.getMessage(), t);
-        }
-        executorRepository.updateThreadpool(url, executor);
-        super.setUrl(getUrl().addParameters(url.getParameters()));
-    }
+	@Override
+	public void send(Object message, boolean sent) throws RemotingException {
+		Collection<Channel> channels = getChannels();
+		for (Channel channel : channels) {
+			if (channel.isConnected()) {
+				channel.send(message, sent);
+			}
+		}
+	}
 
-    @Override
-    public void send(Object message, boolean sent) throws RemotingException {
-        Collection<Channel> channels = getChannels();
-        for (Channel channel : channels) {
-            if (channel.isConnected()) {
-                channel.send(message, sent);
-            }
-        }
-    }
+	@Override
+	public void close() {
+		if (logger.isInfoEnabled()) {
+			logger.info("Close " + getClass().getSimpleName() + " bind " + getBindAddress() + ", export "
+					+ getLocalAddress());
+		}
+		ExecutorUtil.shutdownNow(executor, 100);
+		try {
+			super.close();
+		} catch (Throwable e) {
+			logger.warn(e.getMessage(), e);
+		}
+		try {
+			doClose();
+		} catch (Throwable e) {
+			logger.warn(e.getMessage(), e);
+		}
+	}
 
-    @Override
-    public void close() {
-        if (logger.isInfoEnabled()) {
-            logger.info("Close " + getClass().getSimpleName() + " bind " + getBindAddress() + ", export " + getLocalAddress());
-        }
-        ExecutorUtil.shutdownNow(executor, 100);
-        try {
-            super.close();
-        } catch (Throwable e) {
-            logger.warn(e.getMessage(), e);
-        }
-        try {
-            doClose();
-        } catch (Throwable e) {
-            logger.warn(e.getMessage(), e);
-        }
-    }
+	@Override
+	public void close(int timeout) {
+		ExecutorUtil.gracefulShutdown(executor, timeout);
+		close();
+	}
 
-    @Override
-    public void close(int timeout) {
-        ExecutorUtil.gracefulShutdown(executor, timeout);
-        close();
-    }
+	@Override
+	public InetSocketAddress getLocalAddress() {
+		return localAddress;
+	}
 
-    @Override
-    public InetSocketAddress getLocalAddress() {
-        return localAddress;
-    }
+	public InetSocketAddress getBindAddress() {
+		return bindAddress;
+	}
 
-    public InetSocketAddress getBindAddress() {
-        return bindAddress;
-    }
+	public int getAccepts() {
+		return accepts;
+	}
 
-    public int getAccepts() {
-        return accepts;
-    }
+	public int getIdleTimeout() {
+		return idleTimeout;
+	}
 
-    public int getIdleTimeout() {
-        return idleTimeout;
-    }
+	@Override
+	public void connected(Channel ch) throws RemotingException {
+		// If the server has entered the shutdown process, reject any new connection
+		if (this.isClosing() || this.isClosed()) {
+			logger.warn("Close new channel " + ch
+					+ ", cause: server is closing or has been closed. For example, receive a new connect request while in shutdown process.");
+			ch.close();
+			return;
+		}
 
-    @Override
-    public void connected(Channel ch) throws RemotingException {
-        // If the server has entered the shutdown process, reject any new connection
-        if (this.isClosing() || this.isClosed()) {
-            logger.warn("Close new channel " + ch + ", cause: server is closing or has been closed. For example, receive a new connect request while in shutdown process.");
-            ch.close();
-            return;
-        }
+		Collection<Channel> channels = getChannels();
+		if (accepts > 0 && channels.size() > accepts) {
+			logger.error("Close channel " + ch + ", cause: The server " + ch.getLocalAddress()
+					+ " connections greater than max config " + accepts);
+			ch.close();
+			return;
+		}
+		super.connected(ch);
+	}
 
-        Collection<Channel> channels = getChannels();
-        if (accepts > 0 && channels.size() > accepts) {
-            logger.error("Close channel " + ch + ", cause: The server " + ch.getLocalAddress() + " connections greater than max config " + accepts);
-            ch.close();
-            return;
-        }
-        super.connected(ch);
-    }
-
-    @Override
-    public void disconnected(Channel ch) throws RemotingException {
-        Collection<Channel> channels = getChannels();
-        if (channels.isEmpty()) {
-            logger.warn("All clients has disconnected from " + ch.getLocalAddress() + ". You can graceful shutdown now.");
-        }
-        super.disconnected(ch);
-    }
+	@Override
+	public void disconnected(Channel ch) throws RemotingException {
+		Collection<Channel> channels = getChannels();
+		if (channels.isEmpty()) {
+			logger.warn(
+					"All clients has disconnected from " + ch.getLocalAddress() + ". You can graceful shutdown now.");
+		}
+		super.disconnected(ch);
+	}
 
 }

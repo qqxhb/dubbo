@@ -597,11 +597,16 @@ public class ServiceConfig<T> extends ServiceConfigBase<T> {
 
 	@SuppressWarnings({ "unchecked", "rawtypes" })
 	/**
-	 * always export injvm
+	 * 导出服务到本地（及jvm导出）
 	 */
 	private void exportLocal(URL url) {
+		//组装导出地址，协议为injvm，主机127.0.0.0 即injvm://127.0.0.0
 		URL local = URLBuilder.from(url).setProtocol(LOCAL_PROTOCOL).setHost(LOCALHOST_VALUE).setPort(0).build();
+		//使用SPI自适应拓展机制，获取ProxyFactory和Protocol的实现。
+		//使用ProxyFactory生成导出服务代理的实现，默认实现JavassistProxy
+		//使用Protocol调用服务导出逻辑，默认实现是DubboProtocol
 		Exporter<?> exporter = PROTOCOL.export(PROXY_FACTORY.getInvoker(ref, (Class) interfaceClass, local));
+		//添加导出服务到缓存中
 		exporters.add(exporter);
 		logger.info("Export dubbo service " + interfaceClass.getName() + " to local registry url : " + local);
 	}

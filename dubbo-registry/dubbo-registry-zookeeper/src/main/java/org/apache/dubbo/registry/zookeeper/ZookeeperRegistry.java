@@ -73,25 +73,34 @@ public class ZookeeperRegistry extends FailbackRegistry {
     private final ZookeeperClient zkClient;
 
     public ZookeeperRegistry(URL url, ZookeeperTransporter zookeeperTransporter) {
+    	//调用父类构造（获取一些例如重试的时间）
         super(url);
+        //如果anyhost=true或者主机地址是0.0.0.0,则抛出异常
         if (url.isAnyHost()) {
             throw new IllegalStateException("registry address == null");
         }
+        // 获取组名，默认为 dubbo
         String group = url.getParameter(GROUP_KEY, DEFAULT_ROOT);
+        //不是/开头，则加上
         if (!group.startsWith(PATH_SEPARATOR)) {
             group = PATH_SEPARATOR + group;
         }
+        //设置路径为group
         this.root = group;
+        // 创建 Zookeeper 客户端，默认为 CuratorZookeeperTransporter
         zkClient = zookeeperTransporter.connect(url);
+        // 添加状态监听器
         zkClient.addStateListener((state) -> {
-            if (state == StateListener.RECONNECTED) {
+            if (state == StateListener.RECONNECTED) {//重新连接状态
                 logger.warn("Trying to fetch the latest urls, in case there're provider changes during connection loss.\n" +
                         " Since ephemeral ZNode will not get deleted for a connection lose, " +
                         "there's no need to re-register url of this instance.");
+                //当zookeeper连接从连接丢失中恢复时，它需要获取最新的提供程序列表。重新注册观察者只是一个副作用，不是强制性的。
                 ZookeeperRegistry.this.fetchLatestAddresses();
-            } else if (state == StateListener.NEW_SESSION_CREATED) {
+            } else if (state == StateListener.NEW_SESSION_CREATED) {//新会话创建
                 logger.warn("Trying to re-register urls and re-subscribe listeners of this instance to registry...");
                 try {
+                	//尝试重新注册URL并将此实例的侦听器重新订阅到注册表
                     ZookeeperRegistry.this.recover();
                 } catch (Exception e) {
                     logger.error(e.getMessage(), e);
@@ -125,6 +134,9 @@ public class ZookeeperRegistry extends FailbackRegistry {
     @Override
     public void doRegister(URL url) {
         try {
+        	 // 通过 Zookeeper 客户端创建节点，节点路径由 toUrlPath 方法生成，路径格式如下:
+            //   /${group}/${serviceInterface}/providers/${url}
+        	// 是否是临时节点由参数dynamic决定，默认为true
             zkClient.create(toUrlPath(url), url.getParameter(DYNAMIC_KEY, true));
         } catch (Throwable e) {
             throw new RpcException("Failed to register " + url + " to zookeeper " + getUrl() + ", cause: " + e.getMessage(), e);

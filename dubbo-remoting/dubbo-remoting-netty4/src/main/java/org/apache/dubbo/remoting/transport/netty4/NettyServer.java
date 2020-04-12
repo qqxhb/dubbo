@@ -53,143 +53,148 @@ import static org.apache.dubbo.common.constants.CommonConstants.SSL_ENABLED_KEY;
  */
 public class NettyServer extends AbstractServer implements RemotingServer {
 
-    private static final Logger logger = LoggerFactory.getLogger(NettyServer.class);
-    /**
-     * the cache for alive worker channel.
-     * <ip:port, dubbo channel>
-     */
-    private Map<String, Channel> channels;
-    /**
-     * netty server bootstrap.
-     */
-    private ServerBootstrap bootstrap;
-    /**
-     * the boss channel that receive connections and dispatch these to worker channel.
-     */
+	private static final Logger logger = LoggerFactory.getLogger(NettyServer.class);
+	/**
+	 * the cache for alive worker channel. <ip:port, dubbo channel>
+	 */
+	private Map<String, Channel> channels;
+	/**
+	 * netty server bootstrap.
+	 */
+	private ServerBootstrap bootstrap;
+	/**
+	 * the boss channel that receive connections and dispatch these to worker
+	 * channel.
+	 */
 	private io.netty.channel.Channel channel;
 
-    private EventLoopGroup bossGroup;
-    private EventLoopGroup workerGroup;
+	private EventLoopGroup bossGroup;
+	private EventLoopGroup workerGroup;
 
-    public NettyServer(URL url, ChannelHandler handler) throws RemotingException {
-        // you can customize name and type of client thread pool by THREAD_NAME_KEY and THREADPOOL_KEY in CommonConstants.
-        // the handler will be wrapped: MultiMessageHandler->HeartbeatHandler->handler
-        super(ExecutorUtil.setThreadName(url, SERVER_THREAD_POOL_NAME), ChannelHandlers.wrap(handler, url));
-    }
+	public NettyServer(URL url, ChannelHandler handler) throws RemotingException {
+		// 调用父类构造函数
+		// 添加线程名称参数，可以在CommonConstants中按thread_name_KEY和THREADPOOL_KEY自定义客户机线程池的名称和类型,默认名称DubboServerHandler
+		// 对handler进行包装MultiMessageHandler->HeartbeatHandler->handler
+		super(ExecutorUtil.setThreadName(url, SERVER_THREAD_POOL_NAME), ChannelHandlers.wrap(handler, url));
+	}
 
-    /**
-     * Init and start netty server
-     *
-     * @throws Throwable
-     */
-    @Override
-    protected void doOpen() throws Throwable {
-        bootstrap = new ServerBootstrap();
+	/**
+	 * Init and start netty server
+	 *
+	 * @throws Throwable
+	 */
+	@Override
+	protected void doOpen() throws Throwable {
+		// 创建服务启动器
+		bootstrap = new ServerBootstrap();
+		// 创建 boss 和 worker 事件组
+		bossGroup = NettyEventLoopFactory.eventLoopGroup(1, "NettyServerBoss");
+		workerGroup = NettyEventLoopFactory.eventLoopGroup(
+				getUrl().getPositiveParameter(IO_THREADS_KEY, Constants.DEFAULT_IO_THREADS), "NettyServerWorker");
+		// 创建NettyServer处理类实例
+		final NettyServerHandler nettyServerHandler = new NettyServerHandler(getUrl(), this);
+		channels = nettyServerHandler.getChannels();
+		// 设置boss和worker事件组
+		bootstrap.group(bossGroup, workerGroup)
+				// 设置SocketChannel
+				.channel(NettyEventLoopFactory.serverSocketChannelClass())
+				// SO_REUSEADDR是让端口释放后立即就可以被再次使用。
+				.option(ChannelOption.SO_REUSEADDR, Boolean.TRUE)
+				// TCP_NODELAY选项是用来控制是否开启Nagle算法，该算法是为了提高较慢的广域网传输效率
+				.childOption(ChannelOption.TCP_NODELAY, Boolean.TRUE)
+				// 创建一个 池化或非池化的缓存区分配器
+				.childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
+				// 添加孩子渠道初始化处理实例
+				.childHandler(new ChannelInitializer<SocketChannel>() {
+					@Override
+					protected void initChannel(SocketChannel ch) throws Exception {
+						// 初始化通道时进行管道pipeline编码解码器等设置
+						int idleTimeout = UrlUtils.getIdleTimeout(getUrl());
+						NettyCodecAdapter adapter = new NettyCodecAdapter(getCodec(), getUrl(), NettyServer.this);
+						if (getUrl().getParameter(SSL_ENABLED_KEY, false)) {
+							ch.pipeline().addLast("negotiation",
+									SslHandlerInitializer.sslServerHandler(getUrl(), nettyServerHandler));
+						}
+						ch.pipeline().addLast("decoder", adapter.getDecoder()).addLast("encoder", adapter.getEncoder())
+								.addLast("server-idle-handler", new IdleStateHandler(0, 0, idleTimeout, MILLISECONDS))
+								.addLast("handler", nettyServerHandler);
+					}
+				});
+		// 绑定到指定的 ip 和端口上
+		ChannelFuture channelFuture = bootstrap.bind(getBindAddress());
+		// 不间断同步
+		channelFuture.syncUninterruptibly();
+		channel = channelFuture.channel();
 
-        bossGroup = NettyEventLoopFactory.eventLoopGroup(1, "NettyServerBoss");
-        workerGroup = NettyEventLoopFactory.eventLoopGroup(
-                getUrl().getPositiveParameter(IO_THREADS_KEY, Constants.DEFAULT_IO_THREADS),
-                "NettyServerWorker");
+	}
 
-        final NettyServerHandler nettyServerHandler = new NettyServerHandler(getUrl(), this);
-        channels = nettyServerHandler.getChannels();
+	@Override
+	protected void doClose() throws Throwable {
+		try {
+			if (channel != null) {
+				// unbind.
+				channel.close();
+			}
+		} catch (Throwable e) {
+			logger.warn(e.getMessage(), e);
+		}
+		try {
+			Collection<org.apache.dubbo.remoting.Channel> channels = getChannels();
+			if (channels != null && channels.size() > 0) {
+				for (org.apache.dubbo.remoting.Channel channel : channels) {
+					try {
+						channel.close();
+					} catch (Throwable e) {
+						logger.warn(e.getMessage(), e);
+					}
+				}
+			}
+		} catch (Throwable e) {
+			logger.warn(e.getMessage(), e);
+		}
+		try {
+			if (bootstrap != null) {
+				bossGroup.shutdownGracefully();
+				workerGroup.shutdownGracefully();
+			}
+		} catch (Throwable e) {
+			logger.warn(e.getMessage(), e);
+		}
+		try {
+			if (channels != null) {
+				channels.clear();
+			}
+		} catch (Throwable e) {
+			logger.warn(e.getMessage(), e);
+		}
+	}
 
-        bootstrap.group(bossGroup, workerGroup)
-                .channel(NettyEventLoopFactory.serverSocketChannelClass())
-                .option(ChannelOption.SO_REUSEADDR, Boolean.TRUE)
-                .childOption(ChannelOption.TCP_NODELAY, Boolean.TRUE)
-                .childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
-                .childHandler(new ChannelInitializer<SocketChannel>() {
-                    @Override
-                    protected void initChannel(SocketChannel ch) throws Exception {
-                        // FIXME: should we use getTimeout()?
-                        int idleTimeout = UrlUtils.getIdleTimeout(getUrl());
-                        NettyCodecAdapter adapter = new NettyCodecAdapter(getCodec(), getUrl(), NettyServer.this);
-                        if (getUrl().getParameter(SSL_ENABLED_KEY, false)) {
-                            ch.pipeline().addLast("negotiation",
-                                    SslHandlerInitializer.sslServerHandler(getUrl(), nettyServerHandler));
-                        }
-                        ch.pipeline()
-                                .addLast("decoder", adapter.getDecoder())
-                                .addLast("encoder", adapter.getEncoder())
-                                .addLast("server-idle-handler", new IdleStateHandler(0, 0, idleTimeout, MILLISECONDS))
-                                .addLast("handler", nettyServerHandler);
-                    }
-                });
-        // bind
-        ChannelFuture channelFuture = bootstrap.bind(getBindAddress());
-        channelFuture.syncUninterruptibly();
-        channel = channelFuture.channel();
+	@Override
+	public Collection<Channel> getChannels() {
+		Collection<Channel> chs = new HashSet<Channel>();
+		for (Channel channel : this.channels.values()) {
+			if (channel.isConnected()) {
+				chs.add(channel);
+			} else {
+				channels.remove(NetUtils.toAddressString(channel.getRemoteAddress()));
+			}
+		}
+		return chs;
+	}
 
-    }
+	@Override
+	public Channel getChannel(InetSocketAddress remoteAddress) {
+		return channels.get(NetUtils.toAddressString(remoteAddress));
+	}
 
-    @Override
-    protected void doClose() throws Throwable {
-        try {
-            if (channel != null) {
-                // unbind.
-                channel.close();
-            }
-        } catch (Throwable e) {
-            logger.warn(e.getMessage(), e);
-        }
-        try {
-            Collection<org.apache.dubbo.remoting.Channel> channels = getChannels();
-            if (channels != null && channels.size() > 0) {
-                for (org.apache.dubbo.remoting.Channel channel : channels) {
-                    try {
-                        channel.close();
-                    } catch (Throwable e) {
-                        logger.warn(e.getMessage(), e);
-                    }
-                }
-            }
-        } catch (Throwable e) {
-            logger.warn(e.getMessage(), e);
-        }
-        try {
-            if (bootstrap != null) {
-                bossGroup.shutdownGracefully();
-                workerGroup.shutdownGracefully();
-            }
-        } catch (Throwable e) {
-            logger.warn(e.getMessage(), e);
-        }
-        try {
-            if (channels != null) {
-                channels.clear();
-            }
-        } catch (Throwable e) {
-            logger.warn(e.getMessage(), e);
-        }
-    }
+	@Override
+	public boolean canHandleIdle() {
+		return true;
+	}
 
-    @Override
-    public Collection<Channel> getChannels() {
-        Collection<Channel> chs = new HashSet<Channel>();
-        for (Channel channel : this.channels.values()) {
-            if (channel.isConnected()) {
-                chs.add(channel);
-            } else {
-                channels.remove(NetUtils.toAddressString(channel.getRemoteAddress()));
-            }
-        }
-        return chs;
-    }
-
-    @Override
-    public Channel getChannel(InetSocketAddress remoteAddress) {
-        return channels.get(NetUtils.toAddressString(remoteAddress));
-    }
-
-    @Override
-    public boolean canHandleIdle() {
-        return true;
-    }
-
-    @Override
-    public boolean isBound() {
-        return channel.isActive();
-    }
+	@Override
+	public boolean isBound() {
+		return channel.isActive();
+	}
 
 }

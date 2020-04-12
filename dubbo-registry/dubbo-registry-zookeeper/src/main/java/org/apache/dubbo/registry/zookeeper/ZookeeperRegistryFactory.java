@@ -27,19 +27,19 @@ import org.apache.dubbo.remoting.zookeeper.ZookeeperTransporter;
  */
 public class ZookeeperRegistryFactory extends AbstractRegistryFactory {
 
-    private ZookeeperTransporter zookeeperTransporter;
+	private ZookeeperTransporter zookeeperTransporter;
 
-    /**
-     * Invisible injection of zookeeper client via IOC/SPI
-     * @param zookeeperTransporter
-     */
-    public void setZookeeperTransporter(ZookeeperTransporter zookeeperTransporter) {
-        this.zookeeperTransporter = zookeeperTransporter;
-    }
+	/**
+	 * zookeeperTransporter 由 SPI 在运行时注入，类型为 ZookeeperTransporter$Adaptive
+	 */
+	public void setZookeeperTransporter(ZookeeperTransporter zookeeperTransporter) {
+		this.zookeeperTransporter = zookeeperTransporter;
+	}
 
-    @Override
-    public Registry createRegistry(URL url) {
-        return new ZookeeperRegistry(url, zookeeperTransporter);
-    }
+	@Override
+	public Registry createRegistry(URL url) {
+		// 创建 ZookeeperRegistry
+		return new ZookeeperRegistry(url, zookeeperTransporter);
+	}
 
 }

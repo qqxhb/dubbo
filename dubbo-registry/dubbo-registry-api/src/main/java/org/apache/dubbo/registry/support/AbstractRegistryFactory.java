@@ -98,34 +98,38 @@ public abstract class AbstractRegistryFactory implements RegistryFactory {
 
     @Override
     public Registry getRegistry(URL url) {
+    	//AtomicBoolean destroyed，已经执行福哦哦销毁则抛出异常
         if (destroyed.get()) {
             LOGGER.warn("All registry instances have been destroyed, failed to fetch any instance. " +
                     "Usually, this means no need to try to do unnecessary redundant resource clearance, all registries has been taken care of.");
             return DEFAULT_NOP_REGISTRY;
         }
-
+        // 组装URL（路径、接口等参数）
         url = URLBuilder.from(url)
                 .setPath(RegistryService.class.getName())
                 .addParameter(INTERFACE_KEY, RegistryService.class.getName())
                 .removeParameters(EXPORT_KEY, REFER_KEY)
                 .build();
+        //创建注册缓存key
         String key = createRegistryCacheKey(url);
-        // Lock the registry access process to ensure a single instance of the registry
+        // 锁定注册表访问进程以确保注册表的单个实例
         LOCK.lock();
         try {
+        	//从缓存中获取，获取到则直接返回
             Registry registry = REGISTRIES.get(key);
             if (registry != null) {
                 return registry;
             }
-            //create registry by spi/ioc
+            //缓存中不存在则通过SPI反方式创建，创建失败抛出异常
             registry = createRegistry(url);
             if (registry == null) {
                 throw new IllegalStateException("Can not create registry " + url);
             }
+            //放入缓存并返回
             REGISTRIES.put(key, registry);
             return registry;
         } finally {
-            // Release the lock
+            // 释放锁
             LOCK.unlock();
         }
     }
