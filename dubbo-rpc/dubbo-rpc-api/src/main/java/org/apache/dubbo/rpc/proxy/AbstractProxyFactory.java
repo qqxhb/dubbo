@@ -37,48 +37,49 @@ import static org.apache.dubbo.rpc.Constants.INTERFACES;
  * AbstractProxyFactory
  */
 public abstract class AbstractProxyFactory implements ProxyFactory {
-    private static final Class<?>[] INTERNAL_INTERFACES = new Class<?>[]{
-            EchoService.class, Destroyable.class
-    };
+	private static final Class<?>[] INTERNAL_INTERFACES = new Class<?>[] { EchoService.class, Destroyable.class };
 
-    @Override
-    public <T> T getProxy(Invoker<T> invoker) throws RpcException {
-        return getProxy(invoker, false);
-    }
+	@Override
+	public <T> T getProxy(Invoker<T> invoker) throws RpcException {
+		return getProxy(invoker, false);
+	}
 
-    @Override
-    public <T> T getProxy(Invoker<T> invoker, boolean generic) throws RpcException {
-        Set<Class<?>> interfaces = new HashSet<>();
+	@Override
+	public <T> T getProxy(Invoker<T> invoker, boolean generic) throws RpcException {
+		Set<Class<?>> interfaces = new HashSet<>();
+		// 获取接口地址，参数名interfaces
+		String config = invoker.getUrl().getParameter(INTERFACES);
+		if (config != null && config.length() > 0) {
+			// 逗号切分接口列表
+			String[] types = COMMA_SPLIT_PATTERN.split(config);
+			for (String type : types) {
+				// 反射加载接口类
+				interfaces.add(ReflectUtils.forName(type));
+			}
+		}
 
-        String config = invoker.getUrl().getParameter(INTERFACES);
-        if (config != null && config.length() > 0) {
-            String[] types = COMMA_SPLIT_PATTERN.split(config);
-            for (String type : types) {
-                // TODO can we load successfully for a different classloader?.
-                interfaces.add(ReflectUtils.forName(type));
-            }
-        }
+		if (generic) {// 是泛化服务
+			// 如果Invoker的接口不是GenericService的子接口，则像接口中添加一个子接口到接口集合中
+			if (!GenericService.class.isAssignableFrom(invoker.getInterface())) {
+				interfaces.add(com.alibaba.dubbo.rpc.service.GenericService.class);
+			}
 
-        if (generic) {
-            if (!GenericService.class.isAssignableFrom(invoker.getInterface())) {
-                interfaces.add(com.alibaba.dubbo.rpc.service.GenericService.class);
-            }
+			try {
+				// 从url中找到真正的接口即interface参数的值，然后反射获取接口类存入接口集合中
+				String realInterface = invoker.getUrl().getParameter(Constants.INTERFACE);
+				interfaces.add(ReflectUtils.forName(realInterface));
+			} catch (Throwable e) {
+				// ignore
+			}
+		}
+		// 将Invoker的接口放入接口集合中
+		interfaces.add(invoker.getInterface());
+		// 将 EchoService.class, Destroyable.class放入接口集合中
+		interfaces.addAll(Arrays.asList(INTERNAL_INTERFACES));
+		// 调用重载方法，又子类实现
+		return getProxy(invoker, interfaces.toArray(new Class<?>[0]));
+	}
 
-            try {
-                // find the real interface from url
-                String realInterface = invoker.getUrl().getParameter(Constants.INTERFACE);
-                interfaces.add(ReflectUtils.forName(realInterface));
-            } catch (Throwable e) {
-                // ignore
-            }
-        }
-
-        interfaces.add(invoker.getInterface());
-        interfaces.addAll(Arrays.asList(INTERNAL_INTERFACES));
-
-        return getProxy(invoker, interfaces.toArray(new Class<?>[0]));
-    }
-
-    public abstract <T> T getProxy(Invoker<T> invoker, Class<?>[] types);
+	public abstract <T> T getProxy(Invoker<T> invoker, Class<?>[] types);
 
 }
