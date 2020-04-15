@@ -31,18 +31,21 @@ import java.util.List;
  */
 public class AvailableClusterInvoker<T> extends AbstractClusterInvoker<T> {
 
-    public AvailableClusterInvoker(Directory<T> directory) {
-        super(directory);
-    }
+	public AvailableClusterInvoker(Directory<T> directory) {
+		super(directory);
+	}
 
-    @Override
-    public Result doInvoke(Invocation invocation, List<Invoker<T>> invokers, LoadBalance loadbalance) throws RpcException {
-        for (Invoker<T> invoker : invokers) {
-            if (invoker.isAvailable()) {
-                return invoker.invoke(invocation);
-            }
-        }
-        throw new RpcException("No provider available in " + invokers);
-    }
+	@Override
+	public Result doInvoke(Invocation invocation, List<Invoker<T>> invokers, LoadBalance loadbalance)
+			throws RpcException {
+		// 遍历所有Invoker
+		for (Invoker<T> invoker : invokers) {
+			// 当前提供者可用，则直接调用并返回
+			if (invoker.isAvailable()) {
+				return invoker.invoke(invocation);
+			}
+		}
+		throw new RpcException("No provider available in " + invokers);
+	}
 
 }

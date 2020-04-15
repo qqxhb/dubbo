@@ -29,6 +29,8 @@ import org.apache.dubbo.rpc.cluster.support.FailoverCluster;
  * <a href="http://en.wikipedia.org/wiki/Fault-tolerant_system">Fault-Tolerant</a>
  *
  */
+
+//默认使用FailoverCluster（失败自动切换）
 @SPI(FailoverCluster.NAME)
 public interface Cluster {
 
@@ -44,3 +46,6 @@ public interface Cluster {
     <T> Invoker<T> join(Directory<T> directory) throws RpcException;
 
 }
+
+
+

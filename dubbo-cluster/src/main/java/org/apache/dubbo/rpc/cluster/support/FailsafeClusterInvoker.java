@@ -29,28 +29,33 @@ import org.apache.dubbo.rpc.cluster.LoadBalance;
 import java.util.List;
 
 /**
- * When invoke fails, log the error message and ignore this error by returning an empty Result.
- * Usually used to write audit logs and other operations
+ * When invoke fails, log the error message and ignore this error by returning
+ * an empty Result. Usually used to write audit logs and other operations
  *
  * <a href="http://en.wikipedia.org/wiki/Fail-safe">Fail-safe</a>
  *
  */
 public class FailsafeClusterInvoker<T> extends AbstractClusterInvoker<T> {
-    private static final Logger logger = LoggerFactory.getLogger(FailsafeClusterInvoker.class);
+	private static final Logger logger = LoggerFactory.getLogger(FailsafeClusterInvoker.class);
 
-    public FailsafeClusterInvoker(Directory<T> directory) {
-        super(directory);
-    }
+	public FailsafeClusterInvoker(Directory<T> directory) {
+		super(directory);
+	}
 
-    @Override
-    public Result doInvoke(Invocation invocation, List<Invoker<T>> invokers, LoadBalance loadbalance) throws RpcException {
-        try {
-            checkInvokers(invokers, invocation);
-            Invoker<T> invoker = select(loadbalance, invocation, invokers, null);
-            return invoker.invoke(invocation);
-        } catch (Throwable e) {
-            logger.error("Failsafe ignore exception: " + e.getMessage(), e);
-            return AsyncRpcResult.newDefaultAsyncResult(null, null, invocation); // ignore
-        }
-    }
+	@Override
+	public Result doInvoke(Invocation invocation, List<Invoker<T>> invokers, LoadBalance loadbalance)
+			throws RpcException {
+		try {
+			// 判空校验
+			checkInvokers(invokers, invocation);
+			// 选择可用服务
+			Invoker<T> invoker = select(loadbalance, invocation, invokers, null);
+			// 执行远程调用
+			return invoker.invoke(invocation);
+		} catch (Throwable e) {
+			// 捕获异常并返回默认空异步结果
+			logger.error("Failsafe ignore exception: " + e.getMessage(), e);
+			return AsyncRpcResult.newDefaultAsyncResult(null, null, invocation); // ignore
+		}
+	}
 }

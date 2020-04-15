@@ -34,34 +34,40 @@ import java.util.List;
  */
 public class BroadcastClusterInvoker<T> extends AbstractClusterInvoker<T> {
 
-    private static final Logger logger = LoggerFactory.getLogger(BroadcastClusterInvoker.class);
+	private static final Logger logger = LoggerFactory.getLogger(BroadcastClusterInvoker.class);
 
-    public BroadcastClusterInvoker(Directory<T> directory) {
-        super(directory);
-    }
+	public BroadcastClusterInvoker(Directory<T> directory) {
+		super(directory);
+	}
 
-    @Override
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    public Result doInvoke(final Invocation invocation, List<Invoker<T>> invokers, LoadBalance loadbalance) throws RpcException {
-        checkInvokers(invokers, invocation);
-        RpcContext.getContext().setInvokers((List) invokers);
-        RpcException exception = null;
-        Result result = null;
-        for (Invoker<T> invoker : invokers) {
-            try {
-                result = invoker.invoke(invocation);
-            } catch (RpcException e) {
-                exception = e;
-                logger.warn(e.getMessage(), e);
-            } catch (Throwable e) {
-                exception = new RpcException(e.getMessage(), e);
-                logger.warn(e.getMessage(), e);
-            }
-        }
-        if (exception != null) {
-            throw exception;
-        }
-        return result;
-    }
+	@Override
+	@SuppressWarnings({ "unchecked", "rawtypes" })
+	public Result doInvoke(final Invocation invocation, List<Invoker<T>> invokers, LoadBalance loadbalance)
+			throws RpcException {
+		// 检查Invoker是不是空，是在抛出异常
+		checkInvokers(invokers, invocation);
+		// 设置调用的Invoker到上下文中
+		RpcContext.getContext().setInvokers((List) invokers);
+		// 记录异常
+		RpcException exception = null;
+		Result result = null;
+		// 遍历 Invoker 列表，逐个调用远程服务
+		for (Invoker<T> invoker : invokers) {
+			try {
+				result = invoker.invoke(invocation);
+			} catch (RpcException e) {
+				exception = e;
+				logger.warn(e.getMessage(), e);
+			} catch (Throwable e) {
+				exception = new RpcException(e.getMessage(), e);
+				logger.warn(e.getMessage(), e);
+			}
+		}
+		// 有一个失败则抛出异常
+		if (exception != null) {
+			throw exception;
+		}
+		return result;
+	}
 
 }

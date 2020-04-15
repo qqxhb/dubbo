@@ -38,79 +38,91 @@ import static org.apache.dubbo.common.constants.CommonConstants.DEFAULT_RETRIES;
 import static org.apache.dubbo.common.constants.CommonConstants.RETRIES_KEY;
 
 /**
- * When invoke fails, log the initial error and retry other invokers (retry n times, which means at most n different invokers will be invoked)
- * Note that retry causes latency.
+ * When invoke fails, log the initial error and retry other invokers (retry n
+ * times, which means at most n different invokers will be invoked) Note that
+ * retry causes latency.
  * <p>
  * <a href="http://en.wikipedia.org/wiki/Failover">Failover</a>
  *
  */
 public class FailoverClusterInvoker<T> extends AbstractClusterInvoker<T> {
 
-    private static final Logger logger = LoggerFactory.getLogger(FailoverClusterInvoker.class);
+	private static final Logger logger = LoggerFactory.getLogger(FailoverClusterInvoker.class);
 
-    public FailoverClusterInvoker(Directory<T> directory) {
-        super(directory);
-    }
+	public FailoverClusterInvoker(Directory<T> directory) {
+		super(directory);
+	}
 
-    @Override
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    public Result doInvoke(Invocation invocation, final List<Invoker<T>> invokers, LoadBalance loadbalance) throws RpcException {
-        List<Invoker<T>> copyInvokers = invokers;
-        checkInvokers(copyInvokers, invocation);
-        String methodName = RpcUtils.getMethodName(invocation);
-        int len = getUrl().getMethodParameter(methodName, RETRIES_KEY, DEFAULT_RETRIES) + 1;
-        if (len <= 0) {
-            len = 1;
-        }
-        // retry loop.
-        RpcException le = null; // last exception.
-        List<Invoker<T>> invoked = new ArrayList<Invoker<T>>(copyInvokers.size()); // invoked invokers.
-        Set<String> providers = new HashSet<String>(len);
-        for (int i = 0; i < len; i++) {
-            //Reselect before retry to avoid a change of candidate `invokers`.
-            //NOTE: if `invokers` changed, then `invoked` also lose accuracy.
-            if (i > 0) {
-                checkWhetherDestroyed();
-                copyInvokers = list(invocation);
-                // check again
-                checkInvokers(copyInvokers, invocation);
-            }
-            Invoker<T> invoker = select(loadbalance, invocation, copyInvokers, invoked);
-            invoked.add(invoker);
-            RpcContext.getContext().setInvokers((List) invoked);
-            try {
-                Result result = invoker.invoke(invocation);
-                if (le != null && logger.isWarnEnabled()) {
-                    logger.warn("Although retry the method " + methodName
-                            + " in the service " + getInterface().getName()
-                            + " was successful by the provider " + invoker.getUrl().getAddress()
-                            + ", but there have been failed providers " + providers
-                            + " (" + providers.size() + "/" + copyInvokers.size()
-                            + ") from the registry " + directory.getUrl().getAddress()
-                            + " on the consumer " + NetUtils.getLocalHost()
-                            + " using the dubbo version " + Version.getVersion() + ". Last error is: "
-                            + le.getMessage(), le);
-                }
-                return result;
-            } catch (RpcException e) {
-                if (e.isBiz()) { // biz exception.
-                    throw e;
-                }
-                le = e;
-            } catch (Throwable e) {
-                le = new RpcException(e.getMessage(), e);
-            } finally {
-                providers.add(invoker.getUrl().getAddress());
-            }
-        }
-        throw new RpcException(le.getCode(), "Failed to invoke the method "
-                + methodName + " in the service " + getInterface().getName()
-                + ". Tried " + len + " times of the providers " + providers
-                + " (" + providers.size() + "/" + copyInvokers.size()
-                + ") from the registry " + directory.getUrl().getAddress()
-                + " on the consumer " + NetUtils.getLocalHost() + " using the dubbo version "
-                + Version.getVersion() + ". Last error is: "
-                + le.getMessage(), le.getCause() != null ? le.getCause() : le);
-    }
+	@Override
+	@SuppressWarnings({ "unchecked", "rawtypes" })
+	public Result doInvoke(Invocation invocation, final List<Invoker<T>> invokers, LoadBalance loadbalance)
+			throws RpcException {
+		// 因为invokers是final类型不能修改，因此重新创建一个零时变量
+		List<Invoker<T>> copyInvokers = invokers;
+		// 检查Invoker是不是空，是在抛出异常
+		checkInvokers(copyInvokers, invocation);
+		// 获取调用方法名称
+		String methodName = RpcUtils.getMethodName(invocation);
+		// 获取重试次数，默认1
+		int len = getUrl().getMethodParameter(methodName, RETRIES_KEY, DEFAULT_RETRIES) + 1;
+		if (len <= 0) {
+			len = 1;
+		}
+		// 循环重试
+		RpcException le = null; // 记录上一个调用异常
+		// 记录调用过的Invoker
+		List<Invoker<T>> invoked = new ArrayList<Invoker<T>>(copyInvokers.size());
+		// 记录提供给地址
+		Set<String> providers = new HashSet<String>(len);
+		for (int i = 0; i < len; i++) {
+			// 重试循环都会重新检查及列举并选则可用Invoker，避免调用过程中提供者改变（例如服务挂了）导致异常
+			if (i > 0) {//表示重试
+				// 检查是够已经销毁
+				checkWhetherDestroyed();
+				// 重新列举可用Invoker
+				copyInvokers = list(invocation);
+				// 校验Invoker是否为空
+				checkInvokers(copyInvokers, invocation);
+			}
+			// 从可用Invoker中选出一个
+			Invoker<T> invoker = select(loadbalance, invocation, copyInvokers, invoked);
+			// 添加到已经调用过Invoker集合中
+			invoked.add(invoker);
+			// 设置已经调用的Invoker到上下文中
+			RpcContext.getContext().setInvokers((List) invoked);
+			try {
+				// 执行invoke方法获取结果
+				Result result = invoker.invoke(invocation);
+				if (le != null && logger.isWarnEnabled()) {
+					logger.warn("Although retry the method " + methodName + " in the service "
+							+ getInterface().getName() + " was successful by the provider "
+							+ invoker.getUrl().getAddress() + ", but there have been failed providers " + providers
+							+ " (" + providers.size() + "/" + copyInvokers.size() + ") from the registry "
+							+ directory.getUrl().getAddress() + " on the consumer " + NetUtils.getLocalHost()
+							+ " using the dubbo version " + Version.getVersion() + ". Last error is: "
+							+ le.getMessage(), le);
+				}
+				return result;
+			} catch (RpcException e) {
+				if (e.isBiz()) { // biz exception.
+					throw e;
+				}
+				le = e;
+			} catch (Throwable e) {
+				le = new RpcException(e.getMessage(), e);
+			} finally {
+				// 缓存提供者地址
+				providers.add(invoker.getUrl().getAddress());
+			}
+		}
+		// 重试次数结束，没有返回，则表示调用失败抛出异常
+		throw new RpcException(le.getCode(),
+				"Failed to invoke the method " + methodName + " in the service " + getInterface().getName() + ". Tried "
+						+ len + " times of the providers " + providers + " (" + providers.size() + "/"
+						+ copyInvokers.size() + ") from the registry " + directory.getUrl().getAddress()
+						+ " on the consumer " + NetUtils.getLocalHost() + " using the dubbo version "
+						+ Version.getVersion() + ". Last error is: " + le.getMessage(),
+				le.getCause() != null ? le.getCause() : le);
+	}
 
 }

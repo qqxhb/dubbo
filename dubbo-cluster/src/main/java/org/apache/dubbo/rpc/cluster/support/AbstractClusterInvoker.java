@@ -51,263 +51,282 @@ import static org.apache.dubbo.rpc.cluster.Constants.DEFAULT_CLUSTER_STICKY;
  */
 public abstract class AbstractClusterInvoker<T> implements Invoker<T> {
 
-    private static final Logger logger = LoggerFactory.getLogger(AbstractClusterInvoker.class);
+	private static final Logger logger = LoggerFactory.getLogger(AbstractClusterInvoker.class);
 
-    protected Directory<T> directory;
+	protected Directory<T> directory;
 
-    protected boolean availablecheck;
+	protected boolean availablecheck;
 
-    private AtomicBoolean destroyed = new AtomicBoolean(false);
+	private AtomicBoolean destroyed = new AtomicBoolean(false);
 
-    private volatile Invoker<T> stickyInvoker = null;
+	private volatile Invoker<T> stickyInvoker = null;
 
-    public AbstractClusterInvoker() {
-    }
+	public AbstractClusterInvoker() {
+	}
 
-    public AbstractClusterInvoker(Directory<T> directory) {
-        this(directory, directory.getUrl());
-    }
+	public AbstractClusterInvoker(Directory<T> directory) {
+		this(directory, directory.getUrl());
+	}
 
-    public AbstractClusterInvoker(Directory<T> directory, URL url) {
-        if (directory == null) {
-            throw new IllegalArgumentException("service directory == null");
-        }
+	public AbstractClusterInvoker(Directory<T> directory, URL url) {
+		if (directory == null) {
+			throw new IllegalArgumentException("service directory == null");
+		}
 
-        this.directory = directory;
-        //sticky: invoker.isAvailable() should always be checked before using when availablecheck is true.
-        this.availablecheck = url.getParameter(CLUSTER_AVAILABLE_CHECK_KEY, DEFAULT_CLUSTER_AVAILABLE_CHECK);
-    }
+		this.directory = directory;
+		// sticky: invoker.isAvailable() should always be checked before using when
+		// availablecheck is true.
+		this.availablecheck = url.getParameter(CLUSTER_AVAILABLE_CHECK_KEY, DEFAULT_CLUSTER_AVAILABLE_CHECK);
+	}
 
-    @Override
-    public Class<T> getInterface() {
-        return directory.getInterface();
-    }
+	@Override
+	public Class<T> getInterface() {
+		return directory.getInterface();
+	}
 
-    @Override
-    public URL getUrl() {
-        return directory.getConsumerUrl();
-    }
+	@Override
+	public URL getUrl() {
+		return directory.getConsumerUrl();
+	}
 
-    public URL getRegistryUrl() {
-        return directory.getUrl();
-    }
+	public URL getRegistryUrl() {
+		return directory.getUrl();
+	}
 
-    @Override
-    public boolean isAvailable() {
-        Invoker<T> invoker = stickyInvoker;
-        if (invoker != null) {
-            return invoker.isAvailable();
-        }
-        return directory.isAvailable();
-    }
+	@Override
+	public boolean isAvailable() {
+		Invoker<T> invoker = stickyInvoker;
+		if (invoker != null) {
+			return invoker.isAvailable();
+		}
+		return directory.isAvailable();
+	}
 
-    public Directory<T> getDirectory() {
-        return directory;
-    }
+	public Directory<T> getDirectory() {
+		return directory;
+	}
 
-    @Override
-    public void destroy() {
-        if (destroyed.compareAndSet(false, true)) {
-            directory.destroy();
-        }
-    }
+	@Override
+	public void destroy() {
+		if (destroyed.compareAndSet(false, true)) {
+			directory.destroy();
+		}
+	}
 
-    /**
-     * Select a invoker using loadbalance policy.</br>
-     * a) Firstly, select an invoker using loadbalance. If this invoker is in previously selected list, or,
-     * if this invoker is unavailable, then continue step b (reselect), otherwise return the first selected invoker</br>
-     * <p>
-     * b) Reselection, the validation rule for reselection: selected > available. This rule guarantees that
-     * the selected invoker has the minimum chance to be one in the previously selected list, and also
-     * guarantees this invoker is available.
-     *
-     * @param loadbalance load balance policy
-     * @param invocation  invocation
-     * @param invokers    invoker candidates
-     * @param selected    exclude selected invokers or not
-     * @return the invoker which will final to do invoke.
-     * @throws RpcException exception
-     */
-    protected Invoker<T> select(LoadBalance loadbalance, Invocation invocation,
-                                List<Invoker<T>> invokers, List<Invoker<T>> selected) throws RpcException {
+	/**
+	 * Select a invoker using loadbalance policy.</br>
+	 * a) Firstly, select an invoker using loadbalance. If this invoker is in
+	 * previously selected list, or, if this invoker is unavailable, then continue
+	 * step b (reselect), otherwise return the first selected invoker</br>
+	 * <p>
+	 * b) Reselection, the validation rule for reselection: selected > available.
+	 * This rule guarantees that the selected invoker has the minimum chance to be
+	 * one in the previously selected list, and also guarantees this invoker is
+	 * available.
+	 *
+	 * @param loadbalance load balance policy
+	 * @param invocation  invocation
+	 * @param invokers    invoker candidates
+	 * @param selected    exclude selected invokers or not
+	 * @return the invoker which will final to do invoke.
+	 * @throws RpcException exception
+	 */
+	protected Invoker<T> select(LoadBalance loadbalance, Invocation invocation, List<Invoker<T>> invokers,
+			List<Invoker<T>> selected) throws RpcException {
+		// Invoker空直接返回
+		if (CollectionUtils.isEmpty(invokers)) {
+			return null;
+		}
+		// 调用名称，默认空字符""
+		String methodName = invocation == null ? StringUtils.EMPTY_STRING : invocation.getMethodName();
+		// 获取 sticky 配置，sticky 表示粘滞连接。所谓粘滞连接是指让服务消费者尽可能的调用同一个服务提供者，除非该提供者挂了再进行切换
+		boolean sticky = invokers.get(0).getUrl().getMethodParameter(methodName, CLUSTER_STICKY_KEY,
+				DEFAULT_CLUSTER_STICKY);
 
-        if (CollectionUtils.isEmpty(invokers)) {
-            return null;
-        }
-        String methodName = invocation == null ? StringUtils.EMPTY_STRING : invocation.getMethodName();
+		// 检测 invokers 列表是否包含 stickyInvoker，
+		if (stickyInvoker != null && !invokers.contains(stickyInvoker)) {
+			// 不包含，说明 stickyInvoker 代表的服务提供者挂了，此时需要将其置空
+			stickyInvoker = null;
+		}
+		// 在 sticky 为 true，且 stickyInvoker != null 的情况下。
+		// 如果 selected 包含 stickyInvoker，表明 stickyInvoker 对应的服务提供者可能因网络原因未能成功提供服务。
+		if (sticky && stickyInvoker != null && (selected == null || !selected.contains(stickyInvoker))) {
+			// availablecheck 表示是否开启了可用性检查，
+			// 如果开启了，则调用 stickyInvoker 的 isAvailable 方法进行检查，如果检查通过，则直接返回 stickyInvoker。
+			if (availablecheck && stickyInvoker.isAvailable()) {
+				return stickyInvoker;
+			}
+		}
+		// 如果线程走到当前代码处，说明前面的 stickyInvoker 为空，或者不可用。此时继续调用 doSelect 选择 Invoker
+		Invoker<T> invoker = doSelect(loadbalance, invocation, invokers, selected);
+		// 如果 sticky 为 true，则将负载均衡组件选出的 Invoker 赋值给 stickyInvoker
+		if (sticky) {
+			stickyInvoker = invoker;
+		}
+		return invoker;
+	}
 
-        boolean sticky = invokers.get(0).getUrl()
-                .getMethodParameter(methodName, CLUSTER_STICKY_KEY, DEFAULT_CLUSTER_STICKY);
+	private Invoker<T> doSelect(LoadBalance loadbalance, Invocation invocation, List<Invoker<T>> invokers,
+			List<Invoker<T>> selected) throws RpcException {
+		// 判空
+		if (CollectionUtils.isEmpty(invokers)) {
+			return null;
+		}
+		// 只有一个直接返回
+		if (invokers.size() == 1) {
+			return invokers.get(0);
+		}
+		// 通过负载均衡组件选择 Invoker
+		Invoker<T> invoker = loadbalance.select(invokers, getUrl(), invocation);
+		// 如果 selected 包含负载均衡选择出的 Invoker，或者该 Invoker不可用但要求可用性检查，此时进行重选
+		if ((selected != null && selected.contains(invoker))
+				|| (!invoker.isAvailable() && getUrl() != null && availablecheck)) {
+			try {
+				// 执行重选
+				Invoker<T> rInvoker = reselect(loadbalance, invocation, invokers, selected, availablecheck);
+				if (rInvoker != null) {
+					// 如果 重选成功，则将其赋值给 invoker
+					invoker = rInvoker;
+				} else {
+					// 获取当前选出的Invoker在 invokers 中的位置
+					int index = invokers.indexOf(invoker);
+					try {
+						// 获取 index + 1 位置处的 Invoker，以下代码等价于：
+						// invoker = invokers.get((index + 1) % invokers.size());
+						invoker = invokers.get((index + 1) % invokers.size());
+					} catch (Exception e) {
+						logger.warn(e.getMessage() + " may because invokers list dynamic change, ignore.", e);
+					}
+				}
+			} catch (Throwable t) {
+				logger.error("cluster reselect fail reason is :" + t.getMessage()
+						+ " if can not solve, you can set cluster.availablecheck=false in url", t);
+			}
+		}
+		return invoker;
+	}
 
-        //ignore overloaded method
-        if (stickyInvoker != null && !invokers.contains(stickyInvoker)) {
-            stickyInvoker = null;
-        }
-        //ignore concurrency problem
-        if (sticky && stickyInvoker != null && (selected == null || !selected.contains(stickyInvoker))) {
-            if (availablecheck && stickyInvoker.isAvailable()) {
-                return stickyInvoker;
-            }
-        }
+	/**
+	 * Reselect, use invokers not in `selected` first, if all invokers are in
+	 * `selected`, just pick an available one using loadbalance policy.
+	 *
+	 * @param loadbalance    load balance policy
+	 * @param invocation     invocation
+	 * @param invokers       invoker candidates
+	 * @param selected       exclude selected invokers or not
+	 * @param availablecheck check invoker available if true
+	 * @return the reselect result to do invoke
+	 * @throws RpcException exception
+	 */
+	private Invoker<T> reselect(LoadBalance loadbalance, Invocation invocation, List<Invoker<T>> invokers,
+			List<Invoker<T>> selected, boolean availablecheck) throws RpcException {
 
-        Invoker<T> invoker = doSelect(loadbalance, invocation, invokers, selected);
+		// 记录参与重选的Invoker集合，如果Invoker数量大于1则该集合大小为Invoker数减一
+		List<Invoker<T>> reselectInvokers = new ArrayList<>(
+				invokers.size() > 1 ? (invokers.size() - 1) : invokers.size());
 
-        if (sticky) {
-            stickyInvoker = invoker;
-        }
-        return invoker;
-    }
+		// First, try picking a invoker not in `selected`.
+		for (Invoker<T> invoker : invokers) {
+			// 如果需要可用性校验但是当前服务不可用则忽略
+			if (availablecheck && !invoker.isAvailable()) {
+				continue;
+			}
+			// 当前Invoker不在一选择的集合中则存入重选的集合中
+			if (selected == null || !selected.contains(invoker)) {
+				reselectInvokers.add(invoker);
+			}
+		}
+		// 如果重选结合不为空则使用负载均衡从中选出一个
+		if (!reselectInvokers.isEmpty()) {
+			return loadbalance.select(reselectInvokers, getUrl(), invocation);
+		}
 
-    private Invoker<T> doSelect(LoadBalance loadbalance, Invocation invocation,
-                                List<Invoker<T>> invokers, List<Invoker<T>> selected) throws RpcException {
+		// 重选集合为空，但是已经选择过的集合不空
+		if (selected != null) {
+			for (Invoker<T> invoker : selected) {
+				// 校验已经选择过的服务是否可用，可用在加入重选集合
+				if ((invoker.isAvailable()) && !reselectInvokers.contains(invoker)) {
+					reselectInvokers.add(invoker);
+				}
+			}
+		}
+		// 通过负载均衡从已选集合的可用服务集合中选出一个Invoker
+		if (!reselectInvokers.isEmpty()) {
+			return loadbalance.select(reselectInvokers, getUrl(), invocation);
+		}
+		// 没有可用的则返回空
+		return null;
+	}
 
-        if (CollectionUtils.isEmpty(invokers)) {
-            return null;
-        }
-        if (invokers.size() == 1) {
-            return invokers.get(0);
-        }
-        Invoker<T> invoker = loadbalance.select(invokers, getUrl(), invocation);
+	@Override
+	public Result invoke(final Invocation invocation) throws RpcException {
+		// 检查是否调用过销毁方法，调用过则抛出异常
+		checkWhetherDestroyed();
 
-        //If the `invoker` is in the  `selected` or invoker is unavailable && availablecheck is true, reselect.
-        if ((selected != null && selected.contains(invoker))
-                || (!invoker.isAvailable() && getUrl() != null && availablecheck)) {
-            try {
-                Invoker<T> rInvoker = reselect(loadbalance, invocation, invokers, selected, availablecheck);
-                if (rInvoker != null) {
-                    invoker = rInvoker;
-                } else {
-                    //Check the index of current selected invoker, if it's not the last one, choose the one at index+1.
-                    int index = invokers.indexOf(invoker);
-                    try {
-                        //Avoid collision
-                        invoker = invokers.get((index + 1) % invokers.size());
-                    } catch (Exception e) {
-                        logger.warn(e.getMessage() + " may because invokers list dynamic change, ignore.", e);
-                    }
-                }
-            } catch (Throwable t) {
-                logger.error("cluster reselect fail reason is :" + t.getMessage() + " if can not solve, you can set cluster.availablecheck=false in url", t);
-            }
-        }
-        return invoker;
-    }
+		// 绑定 attachments 到 invocation 中.
+		Map<String, String> contextAttachments = RpcContext.getContext().getAttachments();
+		if (contextAttachments != null && contextAttachments.size() != 0) {
+			((RpcInvocation) invocation).addAttachments(contextAttachments);
+		}
+		// 调用 Directory 的 list 方法列举 Invoker
+		List<Invoker<T>> invokers = list(invocation);
+		// 通过SPI方式获取负载均衡算法实现
+		LoadBalance loadbalance = initLoadBalance(invokers, invocation);
+		// 幂等操作：将调用id添加到异步操作中
+		RpcUtils.attachInvocationIdIfAsync(getUrl(), invocation);
+		// 调用子类doInvoke实现
+		return doInvoke(invocation, invokers, loadbalance);
+	}
 
-    /**
-     * Reselect, use invokers not in `selected` first, if all invokers are in `selected`,
-     * just pick an available one using loadbalance policy.
-     *
-     * @param loadbalance    load balance policy
-     * @param invocation     invocation
-     * @param invokers       invoker candidates
-     * @param selected       exclude selected invokers or not
-     * @param availablecheck check invoker available if true
-     * @return the reselect result to do invoke
-     * @throws RpcException exception
-     */
-    private Invoker<T> reselect(LoadBalance loadbalance, Invocation invocation,
-                                List<Invoker<T>> invokers, List<Invoker<T>> selected, boolean availablecheck) throws RpcException {
+	protected void checkWhetherDestroyed() {
+		if (destroyed.get()) {
+			throw new RpcException("Rpc cluster invoker for " + getInterface() + " on consumer "
+					+ NetUtils.getLocalHost() + " use dubbo version " + Version.getVersion()
+					+ " is now destroyed! Can not invoke any more.");
+		}
+	}
 
-        //Allocating one in advance, this list is certain to be used.
-        List<Invoker<T>> reselectInvokers = new ArrayList<>(
-                invokers.size() > 1 ? (invokers.size() - 1) : invokers.size());
+	@Override
+	public String toString() {
+		return getInterface() + " -> " + getUrl().toString();
+	}
 
-        // First, try picking a invoker not in `selected`.
-        for (Invoker<T> invoker : invokers) {
-            if (availablecheck && !invoker.isAvailable()) {
-                continue;
-            }
+	protected void checkInvokers(List<Invoker<T>> invokers, Invocation invocation) {
+		if (CollectionUtils.isEmpty(invokers)) {
+			throw new RpcException(RpcException.NO_INVOKER_AVAILABLE_AFTER_FILTER,
+					"Failed to invoke the method " + invocation.getMethodName() + " in the service "
+							+ getInterface().getName() + ". No provider available for the service "
+							+ directory.getConsumerUrl().getServiceKey() + " from registry "
+							+ directory.getUrl().getAddress() + " on the consumer " + NetUtils.getLocalHost()
+							+ " using the dubbo version " + Version.getVersion()
+							+ ". Please check if the providers have been started and registered.");
+		}
+	}
 
-            if (selected == null || !selected.contains(invoker)) {
-                reselectInvokers.add(invoker);
-            }
-        }
+	protected abstract Result doInvoke(Invocation invocation, List<Invoker<T>> invokers, LoadBalance loadbalance)
+			throws RpcException;
 
-        if (!reselectInvokers.isEmpty()) {
-            return loadbalance.select(reselectInvokers, getUrl(), invocation);
-        }
+	protected List<Invoker<T>> list(Invocation invocation) throws RpcException {
+		return directory.list(invocation);
+	}
 
-        // Just pick an available invoker using loadbalance policy
-        if (selected != null) {
-            for (Invoker<T> invoker : selected) {
-                if ((invoker.isAvailable()) // available first
-                        && !reselectInvokers.contains(invoker)) {
-                    reselectInvokers.add(invoker);
-                }
-            }
-        }
-        if (!reselectInvokers.isEmpty()) {
-            return loadbalance.select(reselectInvokers, getUrl(), invocation);
-        }
-
-        return null;
-    }
-
-    @Override
-    public Result invoke(final Invocation invocation) throws RpcException {
-        checkWhetherDestroyed();
-
-        // binding attachments into invocation.
-        Map<String, Object> contextAttachments = RpcContext.getContext().getObjectAttachments();
-        if (contextAttachments != null && contextAttachments.size() != 0) {
-            ((RpcInvocation) invocation).addObjectAttachments(contextAttachments);
-        }
-
-        List<Invoker<T>> invokers = list(invocation);
-        LoadBalance loadbalance = initLoadBalance(invokers, invocation);
-        RpcUtils.attachInvocationIdIfAsync(getUrl(), invocation);
-        return doInvoke(invocation, invokers, loadbalance);
-    }
-
-    protected void checkWhetherDestroyed() {
-        if (destroyed.get()) {
-            throw new RpcException("Rpc cluster invoker for " + getInterface() + " on consumer " + NetUtils.getLocalHost()
-                    + " use dubbo version " + Version.getVersion()
-                    + " is now destroyed! Can not invoke any more.");
-        }
-    }
-
-    @Override
-    public String toString() {
-        return getInterface() + " -> " + getUrl().toString();
-    }
-
-    protected void checkInvokers(List<Invoker<T>> invokers, Invocation invocation) {
-        if (CollectionUtils.isEmpty(invokers)) {
-            throw new RpcException(RpcException.NO_INVOKER_AVAILABLE_AFTER_FILTER, "Failed to invoke the method "
-                    + invocation.getMethodName() + " in the service " + getInterface().getName()
-                    + ". No provider available for the service " + directory.getConsumerUrl().getServiceKey()
-                    + " from registry " + directory.getUrl().getAddress()
-                    + " on the consumer " + NetUtils.getLocalHost()
-                    + " using the dubbo version " + Version.getVersion()
-                    + ". Please check if the providers have been started and registered.");
-        }
-    }
-
-    protected abstract Result doInvoke(Invocation invocation, List<Invoker<T>> invokers,
-                                       LoadBalance loadbalance) throws RpcException;
-
-    protected List<Invoker<T>> list(Invocation invocation) throws RpcException {
-        return directory.list(invocation);
-    }
-
-    /**
-     * Init LoadBalance.
-     * <p>
-     * if invokers is not empty, init from the first invoke's url and invocation
-     * if invokes is empty, init a default LoadBalance(RandomLoadBalance)
-     * </p>
-     *
-     * @param invokers   invokers
-     * @param invocation invocation
-     * @return LoadBalance instance. if not need init, return null.
-     */
-    protected LoadBalance initLoadBalance(List<Invoker<T>> invokers, Invocation invocation) {
-        if (CollectionUtils.isNotEmpty(invokers)) {
-            return ExtensionLoader.getExtensionLoader(LoadBalance.class).getExtension(invokers.get(0).getUrl()
-                    .getMethodParameter(RpcUtils.getMethodName(invocation), LOADBALANCE_KEY, DEFAULT_LOADBALANCE));
-        } else {
-            return ExtensionLoader.getExtensionLoader(LoadBalance.class).getExtension(DEFAULT_LOADBALANCE);
-        }
-    }
+	/**
+	 * Init LoadBalance.
+	 * <p>
+	 * if invokers is not empty, init from the first invoke's url and invocation if
+	 * invokes is empty, init a default LoadBalance(RandomLoadBalance)
+	 * </p>
+	 *
+	 * @param invokers   invokers
+	 * @param invocation invocation
+	 * @return LoadBalance instance. if not need init, return null.
+	 */
+	protected LoadBalance initLoadBalance(List<Invoker<T>> invokers, Invocation invocation) {
+		if (CollectionUtils.isNotEmpty(invokers)) {
+			return ExtensionLoader.getExtensionLoader(LoadBalance.class).getExtension(invokers.get(0).getUrl()
+					.getMethodParameter(RpcUtils.getMethodName(invocation), LOADBALANCE_KEY, DEFAULT_LOADBALANCE));
+		} else {
+			return ExtensionLoader.getExtensionLoader(LoadBalance.class).getExtension(DEFAULT_LOADBALANCE);
+		}
+	}
 }
